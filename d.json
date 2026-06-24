@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "author": "Smart Inventory RFID",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-mfrc522", "id": "rfid", "top": 141.35, "left": 137.84, "attrs": {} },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": -156.8,
+      "left": -42.4,
+      "attrs": { "pins": "i2c", "address": "0x27" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 92.4,
+      "left": -101.8,
+      "attrs": { "color": "red" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": 147.95,
+      "left": -86.4,
+      "attrs": { "value": "220" }
+    },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": -36, "left": -123, "attrs": {} },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_next",
+      "top": 25.4,
+      "left": 201.6,
+      "attrs": { "color": "green", "label": "NEXT" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_prev",
+      "top": 54.2,
+      "left": 278.4,
+      "attrs": { "color": "blue", "label": "PREV" }
+    }
+  ],
+  "connections": [
+    [ "esp:GND.1", "rfid:GND", "black", [ "v0" ] ],
+    [ "esp:3V3", "rfid:3.3V", "red", [ "v0" ] ],
+    [ "esp:5", "rfid:SDA", "green", [ "v0" ] ],
+    [ "esp:18", "rfid:SCK", "yellow", [ "v0" ] ],
+    [ "esp:23", "rfid:MOSI", "blue", [ "v0" ] ],
+    [ "esp:19", "rfid:MISO", "purple", [ "v0" ] ],
+    [ "esp:27", "rfid:RST", "orange", [ "v0" ] ],
+    [ "esp:21", "lcd:SDA", "green", [ "h-148.76", "v-182.6" ] ],
+    [ "esp:22", "lcd:SCL", "yellow", [ "h-148.76", "v-144.3" ] ],
+    [ "esp:3V3", "lcd:VCC", "red", [ "h-52.61", "v-144.1" ] ],
+    [ "esp:GND.2", "lcd:GND", "black", [ "h-148.76", "v-153.6" ] ],
+    [ "esp:2", "led1:A", "red", [ "v0" ] ],
+    [ "led1:K", "r1:1", "red", [ "v0" ] ],
+    [ "r1:2", "esp:GND.1", "black", [ "v0" ] ],
+    [ "esp:4", "bz1:1", "brown", [ "v0" ] ],
+    [ "bz1:2", "esp:GND.3", "black", [ "v0" ] ],
+    [ "btn_next:1.l", "esp:12", "green", [ "h-9.6", "v96", "h-187.39" ] ],
+    [ "btn_next:2.l", "esp:GND.3", "black", [ "v0" ] ],
+    [ "btn_prev:1.l", "esp:14", "blue", [ "h-9.6", "v67.2" ] ],
+    [ "btn_prev:2.l", "esp:GND.3", "black", [ "v0" ] ],
+    [ "led1:C", "r1:1", "red", [ "v0" ] ]
+  ],
+  "dependencies": {}
+}
