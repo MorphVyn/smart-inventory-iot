@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Inventory Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="inv-root">
+
+    <div class="inv-header">
+      <div>
+        <h1 class="inv-title">Smart Inventory</h1>
+        <p class="inv-subtitle">Sistem Monitoring Stok Gudang Real-time</p>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <button class="notif-btn" onclick="clearNotifikasi()" title="Tandai semua notifikasi sudah dibaca">
+          &#9888; <span id="notif-badge" style="display:none;">0</span>
+        </button>
+        <div class="status-label">
+          <span class="status-dot"></span>
+          <span id="status-text">Menghubungkan...</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-card">
+        <p class="summary-label">Total masuk hari ini</p>
+        <p class="summary-val" id="total-in">0</p>
+      </div>
+      <div class="summary-card">
+        <p class="summary-label">Total keluar hari ini</p>
+        <p class="summary-val" id="total-out">0</p>
+      </div>
+      <div class="summary-card">
+        <p class="summary-label">Barang perlu restock</p>
+        <p class="summary-val" id="total-alert">0</p>
+      </div>
+    </div>
+
+    <div class="cards-grid" id="cards-grid">
+      <p class="loading-text">Memuat data dari Firebase...</p>
+    </div>
+
+    <div class="log-section">
+      <p class="log-title">Log Aktivitas</p>
+      <ul class="log-list" id="log-list">
+        <li class="log-empty">Belum ada aktivitas...</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <script src="app.js"></script>
+</body>
+</html>
