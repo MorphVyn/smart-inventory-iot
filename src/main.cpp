@@ -1,28 +1,26 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <SPI.h>
 #include <MFRC522.h>
-#include <Firebase_ESP_Client.h>
-#include <Adafruit_LiquidCrystal.h>
+#include <LiquidCrystal_I2C.h>
 #include <Wire.h>
-#include "addons/TokenHelper.h"
-#include "addons/RTDBHelper.h"
 
 #define WIFI_SSID     "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
 
-#define API_KEY      "AIzaSyAijPXyQWz4LnmCTujlnENTWMxEGdwmANg"
 #define DATABASE_URL "https://smart-inventory-iot-407f4-default-rtdb.asia-southeast1.firebasedatabase.app"
 
-#define UID_CARD_IN  "AA:BB:CC:DD"  
-#define UID_CARD_OUT "11:22:33:44"  
+#define UID_CARD_IN  "01:02:03:04"
+#define UID_CARD_OUT "05:06:07:08"
 
 #define RFID_SS_PIN   5
 #define RFID_RST_PIN  27
 #define LED_RED       2
 #define BUZZER_PIN    4
-#define BTN_NEXT      12    
-#define BTN_PREV      14  
+#define BTN_NEXT      12
+#define BTN_PREV      14
 #define LCD_SDA       21
 #define LCD_SCL       22
 
@@ -33,21 +31,19 @@
 #define MAX_ITEMS         10
 
 MFRC522           rfid(RFID_SS_PIN, RFID_RST_PIN);
-FirebaseData      fbdo;
-FirebaseAuth      auth;
-FirebaseConfig    config;
-Adafruit_LiquidCrystal lcd(0x27);
+WiFiClientSecure  sslClient;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 struct BarangItem {
-  String id;     
-  String nama;     
+  String id;
+  String nama;
   int    stok;
   int    ambang_batas;
 };
 
 struct LogEntry {
   String id_barang;
-  String tipe;       
+  String tipe;
   int    stok_after;
   unsigned long ts;
 };
@@ -57,8 +53,8 @@ BarangItem barangList[MAX_ITEMS] = {
   { "barang_002", "Komponen B",  8, 5 },
   { "barang_003", "Komponen C", 20, 5 },
 };
-int jumlahBarang  = 3; 
-int selectedIndex = 0; 
+int jumlahBarang  = 3;
+int selectedIndex = 0;
 
 bool          firebaseReady   = false;
 bool          wifiConnected   = false;
@@ -70,9 +66,11 @@ unsigned long lastBtnNextTime = 0;
 unsigned long lastBtnPrevTime = 0;
 
 void   connectWiFi();
-void   initFirebase();
-bool   pushTransaksi(String id_barang, String tipe, int stok_after,
-                     int ambang, String metode);
+void   seedInventory();
+int    fbPut(String path, String json);
+int    fbPost(String path, String json);
+bool   pushTransaksi(String id_barang, String nama, String tipe,
+                     int stok_after, int ambang, String metode);
 bool   pushAlert(String id_barang, String nama, int stok, int ambang);
 void   syncOfflineLogs();
 void   addToOfflineLog(String id_barang, String tipe, int stok_after);
@@ -103,18 +101,24 @@ void setup() {
   Serial.println("[RFID] MFRC522 ready.");
 
   Wire.begin(LCD_SDA, LCD_SCL);
-  lcd.begin(16, 2);
-  lcd.setBacklight(HIGH);
+  lcd.init();
+  lcd.backlight();
   updateLCD("Smart Inventory", "  Booting...");
   delay(1000);
 
   connectWiFi();
-  if (wifiConnected) initFirebase();
+
+  if (wifiConnected) {
+    sslClient.setInsecure();
+    firebaseReady = true;
+
+    updateLCD("Firebase...", "Seeding data...");
+    seedInventory();
+  }
 
   showSelectedItem();
   Serial.println("[BOOT] Siap. Pilih barang lalu scan kartu IN/OUT.");
 }
-
 
 void loop() {
   if (digitalRead(BTN_NEXT) == LOW &&
@@ -139,17 +143,80 @@ void loop() {
     }
   }
 
-  if (offlineCount > 0 && millis() - lastSyncAttempt > SYNC_RETRY_MS) {
+  if (offlineCount > 0 && firebaseReady &&
+      millis() - lastSyncAttempt > SYNC_RETRY_MS) {
     lastSyncAttempt = millis();
-    wifiConnected   = (WiFi.status() == WL_CONNECTED);
-    if (wifiConnected) {
-      if (!firebaseReady) initFirebase();
-      syncOfflineLogs();
+    wifiConnected = (WiFi.status() == WL_CONNECTED);
+    if (wifiConnected) syncOfflineLogs();
+  }
+}
+
+// --- Firebase REST API helpers ---
+
+int fbPut(String path, String json) {
+  HTTPClient http;
+  String url = String(DATABASE_URL) + path + ".json";
+  http.begin(sslClient, url);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.PUT(json);
+  String resp = http.getString();
+  http.end();
+  Serial.println("[FB PUT] " + path + " → " + String(code));
+  if (code != 200) Serial.println("[FB ERR] " + resp);
+  return code;
+}
+
+int fbPost(String path, String json) {
+  HTTPClient http;
+  String url = String(DATABASE_URL) + path + ".json";
+  http.begin(sslClient, url);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST(json);
+  String resp = http.getString();
+  http.end();
+  Serial.println("[FB POST] " + path + " → " + String(code));
+  if (code != 200) Serial.println("[FB ERR] " + resp);
+  return code;
+}
+
+// --- Seed data awal ---
+
+void seedInventory() {
+  Serial.println("[SEED] Mengirim data awal ke Firebase...");
+  int sukses = 0;
+
+  for (int i = 0; i < jumlahBarang; i++) {
+    BarangItem &b = barangList[i];
+    bool isAlert = (b.stok < b.ambang_batas);
+
+    String json = "{\"nama_barang\":\"" + b.nama + "\","
+                  "\"stok_sekarang\":" + String(b.stok) + ","
+                  "\"ambang_batas\":" + String(b.ambang_batas) + ","
+                  "\"status_alert\":" + (isAlert ? "true" : "false") + ","
+                  "\"terakhir_diubah\":" + String((int)millis()) + "}";
+
+    String path = "/inventory/" + b.id;
+    updateLCD("Seeding...", b.nama.substring(0, 16));
+
+    if (fbPut(path, json) == 200) {
+      sukses++;
+      Serial.println("[SEED] OK: " + b.id);
+    } else {
+      Serial.println("[SEED] FAIL: " + b.id);
+      updateLCD("SEED GAGAL!", b.id.substring(0, 16));
+      delay(1500);
     }
   }
 
-  if (firebaseReady) Firebase.ready();
+  if (sukses == jumlahBarang) {
+    updateLCD("Seed OK!", String(sukses) + " barang");
+  } else {
+    updateLCD("Seed Parsial", String(sukses) + "/" + String(jumlahBarang));
+  }
+  delay(1000);
 }
+
+// --- Transaksi ---
 
 void processCard(String uid) {
   if (uid == UID_CARD_IN) {
@@ -158,7 +225,6 @@ void processCard(String uid) {
     doTransaksi(selectedIndex, "OUT");
   } else {
     Serial.println("[RFID] Kartu tidak dikenal: " + uid);
-    Serial.println("       → Daftarkan UID ini ke UID_CARD_IN atau UID_CARD_OUT");
     updateLCD("Kartu Unknown!", uid.substring(0, 16));
     beepError();
     delay(1500);
@@ -167,7 +233,7 @@ void processCard(String uid) {
 }
 
 void doTransaksi(int idx, String tipe) {
-  BarangItem &b = barangList[idx];  
+  BarangItem &b = barangList[idx];
 
   if (tipe == "OUT" && b.stok <= 0) {
     updateLCD("STOK KOSONG!", b.nama.substring(0, 16));
@@ -184,7 +250,7 @@ void doTransaksi(int idx, String tipe) {
 
   Serial.println("[" + tipe + "] " + b.nama +
                  " | Stok: " + String(b.stok) +
-                 (isAlert ? " ⚠ ALERT" : ""));
+                 (isAlert ? " ALERT" : ""));
 
   String line1 = (tipe == "IN" ? "MASUK  +1" : "KELUAR -1");
   updateLCD(line1, b.nama.substring(0, 16));
@@ -198,10 +264,9 @@ void doTransaksi(int idx, String tipe) {
   delay(1200);
 
   wifiConnected = (WiFi.status() == WL_CONNECTED);
-  String metode = wifiConnected && firebaseReady ? "realtime" : "offline_sync";
 
   if (wifiConnected && firebaseReady) {
-    if (!pushTransaksi(b.id, tipe, b.stok, b.ambang_batas, "realtime")) {
+    if (!pushTransaksi(b.id, b.nama, tipe, b.stok, b.ambang_batas, "realtime")) {
       addToOfflineLog(b.id, tipe, b.stok);
     } else if (isAlert) {
       pushAlert(b.id, b.nama, b.stok, b.ambang_batas);
@@ -213,45 +278,46 @@ void doTransaksi(int idx, String tipe) {
   showSelectedItem();
 }
 
-bool pushTransaksi(String id_barang, String tipe, int stok_after,
-                   int ambang, String metode) {
+bool pushTransaksi(String id_barang, String nama, String tipe,
+                   int stok_after, int ambang, String metode) {
   if (!firebaseReady) return false;
-  bool ok = true;
 
-  String basePath = "/inventory/" + id_barang;
-  bool   isAlert  = (stok_after < ambang);
+  bool isAlert = (stok_after < ambang);
 
-  ok &= Firebase.RTDB.setInt( &fbdo, basePath + "/stok_sekarang",  stok_after);
-  ok &= Firebase.RTDB.setBool(&fbdo, basePath + "/status_alert",   isAlert);
-  ok &= Firebase.RTDB.setInt( &fbdo, basePath + "/terakhir_diubah",(int)millis());
+  String invJson = "{\"nama_barang\":\"" + nama + "\","
+                   "\"stok_sekarang\":" + String(stok_after) + ","
+                   "\"ambang_batas\":" + String(ambang) + ","
+                   "\"status_alert\":" + (isAlert ? "true" : "false") + ","
+                   "\"terakhir_diubah\":" + String((int)millis()) + "}";
 
-  FirebaseJson logJson;
-  logJson.set("id_barang", id_barang);
-  logJson.set("tipe",      tipe);
-  logJson.set("jumlah",    1);
-  logJson.set("timestamp", (int)millis());
-  logJson.set("metode",    metode);
-  ok &= Firebase.RTDB.pushJSON(&fbdo, "/log_transaksi", &logJson);
+  bool ok = (fbPut("/inventory/" + id_barang, invJson) == 200);
 
-  if (!ok) Serial.println("[FB ERR] " + fbdo.errorReason());
-  else     Serial.println("[FB OK] " + tipe + " " + id_barang + " stok:" + String(stok_after));
+  String logJson = "{\"id_barang\":\"" + id_barang + "\","
+                   "\"tipe\":\"" + tipe + "\","
+                   "\"jumlah\":1,"
+                   "\"timestamp\":" + String((int)millis()) + ","
+                   "\"metode\":\"" + metode + "\"}";
+
+  ok &= (fbPost("/log_transaksi", logJson) == 200);
+
+  if (ok) Serial.println("[FB OK] " + tipe + " " + id_barang + " stok:" + String(stok_after));
   return ok;
 }
 
 bool pushAlert(String id_barang, String nama, int stok, int ambang) {
-  FirebaseJson alertJson;
-  alertJson.set("id_barang", id_barang);
-  alertJson.set("pesan",     "Peringatan! Stok " + nama +
-                             " kritis: " + String(stok) +
-                             " (ambang batas: " + String(ambang) + ").");
-  alertJson.set("timestamp", (int)millis());
-  alertJson.set("status",    "unread");
+  String json = "{\"id_barang\":\"" + id_barang + "\","
+                "\"pesan\":\"Peringatan! Stok " + nama +
+                " kritis: " + String(stok) +
+                " (ambang batas: " + String(ambang) + ").\","
+                "\"timestamp\":" + String((int)millis()) + ","
+                "\"status\":\"unread\"}";
 
-  bool ok = Firebase.RTDB.pushJSON(&fbdo, "/notifikasi_alert", &alertJson);
-  if (!ok) Serial.println("[FB ERR] push alert: " + fbdo.errorReason());
-  else     Serial.println("[FB ALERT] Alert dikirim untuk " + id_barang);
+  bool ok = (fbPost("/notifikasi_alert", json) == 200);
+  if (ok) Serial.println("[FB ALERT] Alert dikirim untuk " + id_barang);
   return ok;
 }
+
+// --- Offline buffer ---
 
 void addToOfflineLog(String id_barang, String tipe, int stok_after) {
   if (offlineCount >= OFFLINE_BUF_SIZE) {
@@ -273,12 +339,15 @@ void syncOfflineLogs() {
   int synced = 0;
   for (int i = 0; i < offlineCount; i++) {
     int ambang = 5;
+    String nama = "Barang";
     for (int j = 0; j < jumlahBarang; j++) {
       if (barangList[j].id == offlineBuffer[i].id_barang) {
-        ambang = barangList[j].ambang_batas; break;
+        ambang = barangList[j].ambang_batas;
+        nama   = barangList[j].nama;
+        break;
       }
     }
-    if (pushTransaksi(offlineBuffer[i].id_barang, offlineBuffer[i].tipe,
+    if (pushTransaksi(offlineBuffer[i].id_barang, nama, offlineBuffer[i].tipe,
                       offlineBuffer[i].stok_after, ambang, "offline_sync")) {
       synced++;
     } else {
@@ -300,6 +369,8 @@ void syncOfflineLogs() {
   showSelectedItem();
 }
 
+// --- Navigasi ---
+
 void handleNavNext() {
   selectedIndex = (selectedIndex + 1) % jumlahBarang;
   showSelectedItem();
@@ -320,6 +391,8 @@ void showSelectedItem() {
   updateLCD(line1, line2);
   triggerAlert(alert);
 }
+
+// --- Utilitas ---
 
 String getCardUID() {
   String uid = "";
@@ -373,37 +446,8 @@ void connectWiFi() {
     updateLCD("WiFi Connected!", WiFi.localIP().toString());
   } else {
     wifiConnected = false;
-    Serial.println("\n[WIFI] Gagal → offline mode.");
+    Serial.println("\n[WIFI] Gagal -> offline mode.");
     updateLCD("WiFi GAGAL", "Mode Offline");
   }
   delay(1000);
-}
-
-void initFirebase() {
-  config.api_key               = API_KEY;
-  config.database_url          = DATABASE_URL;
-  config.token_status_callback = tokenStatusCallback; 
-
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
-
-  if (!Firebase.signUp(&config, &auth, "", "")) {
-    Serial.println("[FB WARN] signUp gagal: " +
-                   String(config.signer.signupError.message.c_str()));
-    Serial.println("[FB WARN] Coba lanjut dengan auth yang ada...");
-  } else {
-    Serial.println("[FB] signUp OK.");
-  }
-
-  unsigned long t = millis();
-  while (!Firebase.ready() && millis() - t < 3000) delay(100);
-
-  firebaseReady = Firebase.ready();
-  if (firebaseReady) {
-    Serial.println("[FB] Firebase Ready!");
-    updateLCD("Firebase Ready!", ""); delay(800);
-  } else {
-    Serial.println("[FB ERR] Firebase tidak ready → fallback offline.");
-    updateLCD("FB Gagal!", "Mode Offline"); delay(800);
-  }
 }

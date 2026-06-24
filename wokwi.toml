@@ -4,10 +4,7 @@ firmware = '.pio/build/esp32dev/firmware.bin'
 elf = '.pio/build/esp32dev/firmware.elf'
 
 [[library]]
-name = "Firebase Arduino Client Library for ESP8266 and ESP32"
-
-[[library]]
-name = "Adafruit LiquidCrystal"
+name = "LiquidCrystal I2C"
 
 [[library]]
 name = "MFRC522"
